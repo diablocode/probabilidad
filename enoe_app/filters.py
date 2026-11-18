@@ -8,8 +8,6 @@ import pandas as pd
 MISSING_OPTION = "(Valor faltante)"
 FILTER_COLUMNS = (
     "cve_ent",
-    "n_ent",
-    "per",
     "grupo_edad",
     "sexo_label",
     "cve_mun",

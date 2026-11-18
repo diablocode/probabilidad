@@ -40,8 +40,6 @@ LONGITUDINAL_SOURCE_FILES = (
 
 FILTER_LABELS = {
     "cve_ent": "Entidad",
-    "n_ent": "Ronda de entrevista (n_ent)",
-    "per": "Periodo ENOE (per)",
     "grupo_edad": "Grupo de edad",
     "sexo_label": "Sexo",
     "cve_mun": "Municipio",
@@ -90,14 +88,36 @@ def _show_load_report(report: DataLoadReport) -> None:
 
 
 def _render_filters(frame: pd.DataFrame) -> dict[str, list[object]]:
-    options_by_column = {
-        column: get_filter_options(frame, column) for column in FILTER_COLUMNS
-    }
     reset_clicked = st.sidebar.button(
         "Restablecer filtros", key="reset_filters", width="stretch"
     )
 
-    for column, options in options_by_column.items():
+    ent_options = get_filter_options(frame, "cve_ent")
+    ent_key = "filter_cve_ent"
+    if reset_clicked or ent_key not in st.session_state:
+        st.session_state[ent_key] = ent_options.copy()
+    else:
+        current = st.session_state[ent_key]
+        st.session_state[ent_key] = [v for v in current if v in ent_options]
+
+    selections: dict[str, list[object]] = {}
+    selections["cve_ent"] = st.sidebar.multiselect(
+        FILTER_LABELS["cve_ent"],
+        options=ent_options,
+        key=ent_key,
+    )
+
+    selected_ent = selections["cve_ent"]
+    mun_frame = (
+        apply_filters(frame, {"cve_ent": selected_ent}) if selected_ent else frame
+    )
+
+    for column in FILTER_COLUMNS:
+        if column == "cve_ent":
+            continue
+        options = get_filter_options(
+            mun_frame if column == "cve_mun" else frame, column
+        )
         key = f"filter_{column}"
         if reset_clicked or key not in st.session_state:
             st.session_state[key] = options.copy()
@@ -105,12 +125,10 @@ def _render_filters(frame: pd.DataFrame) -> dict[str, list[object]]:
             current = st.session_state[key]
             st.session_state[key] = [value for value in current if value in options]
 
-    selections: dict[str, list[object]] = {}
-    for column, options in options_by_column.items():
         selections[column] = st.sidebar.multiselect(
             FILTER_LABELS[column],
             options=options,
-            key=f"filter_{column}",
+            key=key,
             help=(
                 f"Valores disponibles: {len(options) - int(MISSING_OPTION in options)}"
                 + ("; incluye valores faltantes." if MISSING_OPTION in options else "")
@@ -469,58 +487,6 @@ def _render_markov_analysis(pairs: pd.DataFrame) -> None:
             width="stretch",
         )
 
-    irreducibility_column, periodicity_column, ergodicity_column = st.columns(3)
-
-    def format_diagnostic(value: bool | None) -> str:
-        return "Sí" if value is True else "No" if value is False else "N/D"
-
-    irreducibility_column.metric(
-        "Irreducible", format_diagnostic(report.irreducible)
-    )
-    periodicity_column.metric("Aperiódica", format_diagnostic(report.aperiodic))
-    ergodicity_column.metric("Ergódica", format_diagnostic(report.ergodic))
-
-    classes = pd.DataFrame(
-        [
-            {
-                "Clase comunicante": ", ".join(item.states),
-                "Cerrada": format_diagnostic(item.closed),
-                "Periodo": item.period if item.period is not None else "N/D",
-            }
-            for item in report.communicating_classes
-        ]
-    )
-    st.markdown("**Clases comunicantes**")
-    st.dataframe(classes, width="stretch", hide_index=True)
-
-    st.markdown("**Distribución estacionaria**")
-    st.caption(report.stationary_status)
-    if report.stationary_distribution is not None:
-        stationary = report.stationary_distribution.rename("Probabilidad")
-        st.dataframe(
-            stationary.rename_axis("Estado").reset_index(),
-            column_config={
-                "Probabilidad": st.column_config.NumberColumn(
-                    "Probabilidad", format="percent"
-                )
-            },
-            width="stretch",
-            hide_index=True,
-        )
-        st.bar_chart(
-            stationary.to_frame(),
-            y_label="Probabilidad estacionaria",
-            height=250,
-        )
-
-    st.markdown("**Tiempos medios de primer paso**")
-    st.caption(report.first_passage_status)
-    if report.mean_first_passage is not None:
-        first_passage = report.mean_first_passage.map(
-            lambda value: "∞" if value == float("inf") else f"{value:.2f}"
-        )
-        st.dataframe(first_passage, width="stretch")
-
 
 def _render_longitudinal_diagnostics(
     selections: Mapping[str, Sequence[object] | None],
@@ -535,89 +501,57 @@ def _render_longitudinal_diagnostics(
         "El análisis longitudinal y el modelo de Markov heredan y aplican "
         "los filtros del panel principal de la izquierda."
     )
-    source_mode = st.radio(
-        "Fuente para el diagnóstico longitudinal",
-        options=["Archivos ENOE del proyecto", "Cargar otro CSV"],
-        horizontal=True,
-        key="longitudinal_source_mode",
-    )
+    env_path = os.environ.get("ENOE_CSV_PATH", "")
+    if "pytest" in env_path or "Temp" in env_path or "temp" in env_path:
+        st.info(
+            "Entorno de prueba detectado; análisis longitudinal "
+            "disponible con los archivos del proyecto."
+        )
+        return
+
     file_reports: tuple[DataLoadReport, ...] = ()
-    if source_mode == "Archivos ENOE del proyecto":
-        env_path = os.environ.get("ENOE_CSV_PATH", "")
-        if "pytest" in env_path or "Temp" in env_path or "temp" in env_path:
-            st.info(
-                "Entorno de prueba detectado; análisis longitudinal "
-                "disponible con los archivos del proyecto."
-            )
-            return
-        source_paths = tuple(
-            Path(__file__).resolve().parent / "enoe" / name
-            for name in LONGITUDINAL_SOURCE_FILES
+    source_paths = tuple(
+        Path(__file__).resolve().parent / "enoe" / name
+        for name in LONGITUDINAL_SOURCE_FILES
+    )
+    missing_paths = [path for path in source_paths if not path.is_file()]
+    if missing_paths:
+        st.error(
+            "No se encontraron todos los archivos de fase 4: "
+            + ", ".join(path.name for path in missing_paths)
         )
-        missing_paths = [path for path in source_paths if not path.is_file()]
-        if missing_paths:
-            st.error(
-                "No se encontraron todos los archivos de fase 4: "
-                + ", ".join(path.name for path in missing_paths)
-            )
-            return
-        try:
-            frame, file_reports = cached_load_longitudinal_files(
-                tuple(str(path) for path in source_paths)
-            )
-        except (FileNotFoundError, DataValidationError) as error:
-            st.error(f"No se pudieron cargar los CSV longitudinales: {error}")
-            return
-        source_id = "project_sdemt_425_126_226"
-        longitudinal_selections = {
-            col: sel for col, sel in selections.items() if col not in {"per", "n_ent"}
-        }
-        frame = apply_filters(frame, longitudinal_selections)
-        st.caption(
-            "Archivos incluidos en orden cronológico: "
-            + " → ".join(LONGITUDINAL_SOURCE_FILES)
+        return
+    try:
+        frame, file_reports = cached_load_longitudinal_files(
+            tuple(str(path) for path in source_paths)
         )
-        if any(report.discarded_rows for report in file_reports):
-            with st.expander("Registros descartados al cargar cada periodo"):
-                st.table(
-                    pd.DataFrame(
-                        [
-                            {
-                                "Archivo": report.source_path.name,
-                                "Leídas": report.loaded_rows,
-                                "Válidas": report.accepted_rows,
-                                "Descartadas": report.discarded_rows,
-                            }
-                            for report in file_reports
-                        ]
-                    )
+    except (FileNotFoundError, DataValidationError) as error:
+        st.error(f"No se pudieron cargar los CSV longitudinales: {error}")
+        return
+    source_id = "project_sdemt_425_126_226"
+    longitudinal_selections = {
+        col: sel for col, sel in selections.items() if col not in {"per", "n_ent"}
+    }
+    frame = apply_filters(frame, longitudinal_selections)
+    st.caption(
+        "Archivos incluidos en orden cronológico: "
+        + " → ".join(LONGITUDINAL_SOURCE_FILES)
+    )
+    if any(report.discarded_rows for report in file_reports):
+        with st.expander("Registros descartados al cargar cada periodo"):
+            st.table(
+                pd.DataFrame(
+                    [
+                        {
+                            "Archivo": report.source_path.name,
+                            "Leídas": report.loaded_rows,
+                            "Válidas": report.accepted_rows,
+                            "Descartadas": report.discarded_rows,
+                        }
+                        for report in file_reports
+                    ]
                 )
-    else:
-        uploaded_file = st.file_uploader(
-            "Cargar archivo con entrevistas de varios periodos",
-            type=["csv"],
-            key="longitudinal_upload",
-        )
-        if uploaded_file is None:
-            return
-        content = uploaded_file.getvalue()
-        source_id = sha256(content).hexdigest()[:12]
-        try:
-            frame = prepare_enoe_frame(
-                pd.read_csv(BytesIO(content), encoding="utf-8-sig", low_memory=False)
             )
-        except pd.errors.EmptyDataError:
-            st.error("El archivo longitudinal está vacío.")
-            return
-        except pd.errors.ParserError as error:
-            st.error(f"No se pudo interpretar el CSV longitudinal: {error}")
-            return
-        except UnicodeDecodeError:
-            st.error("El archivo longitudinal debe estar codificado como UTF-8.")
-            return
-        if frame.empty:
-            st.error("El CSV longitudinal no contiene observaciones.")
-            return
 
     columns = [column for column in frame.columns if column != "source_file"]
     preferred_ids = (
@@ -631,22 +565,7 @@ def _render_longitudinal_diagnostics(
         "n_ren",
     )
     default_ids = [column for column in preferred_ids if column in columns]
-    id_key = f"longitudinal_ids_{source_id}"
-    if id_key not in st.session_state:
-        st.session_state[id_key] = default_ids
-    else:
-        st.session_state[id_key] = [
-            column for column in st.session_state[id_key] if column in columns
-        ]
-    id_columns = st.multiselect(
-        "Campos de la clave de persona",
-        options=columns,
-        key=id_key,
-        help=(
-            "La clave se considera confirmada por indicación del usuario. "
-            "Seleccione los campos que la componen."
-        ),
-    )
+    id_columns = default_ids if default_ids else columns[:1]
 
     preferred_period = (
         "period_index"
@@ -655,14 +574,7 @@ def _render_longitudinal_diagnostics(
         if "per" in columns
         else columns[0]
     )
-    period_key = f"longitudinal_period_{source_id}"
-    if st.session_state.get(period_key) not in columns:
-        st.session_state[period_key] = preferred_period
-    period_column = st.selectbox(
-        "Índice de periodo consecutivo (entero; no usar n_ent)",
-        options=columns,
-        key=period_key,
-    )
+    period_column = preferred_period
 
     preferred_state = (
         "categoria_empleo"
@@ -671,14 +583,7 @@ def _render_longitudinal_diagnostics(
         if "estado_laboral" in columns
         else columns[0]
     )
-    state_key = f"longitudinal_state_{source_id}"
-    if st.session_state.get(state_key) not in columns:
-        st.session_state[state_key] = preferred_state
-    state_column = st.selectbox(
-        "Campo de estado laboral",
-        options=columns,
-        key=state_key,
-    )
+    state_column = preferred_state
     key_verified = True
     if not id_columns:
         st.warning("Seleccione al menos un campo candidato de persona.")
@@ -768,10 +673,22 @@ def main() -> None:
         "Los datos se procesan localmente y el archivo original no se modifica."
     )
 
-    default_path = (
-        Path(__file__).resolve().parent / "enoe" / "ENOE_SDEMT226.csv"
+    st.sidebar.header("Archivo ENOE")
+    selected_file = st.sidebar.selectbox(
+        "Seleccionar trimestre (SDEMT)",
+        options=LONGITUDINAL_SOURCE_FILES,
+        index=2,
+        key="selected_enoe_file",
     )
-    csv_path = Path(os.environ.get("ENOE_CSV_PATH", str(default_path))).expanduser()
+    default_path = (
+        Path(__file__).resolve().parent / "enoe" / selected_file
+    )
+    env_path = os.environ.get("ENOE_CSV_PATH")
+    if env_path and not any(name in env_path for name in LONGITUDINAL_SOURCE_FILES):
+        csv_path = Path(env_path).expanduser()
+    else:
+        csv_path = default_path
+
     try:
         report = cached_load_dataset(str(csv_path.resolve()))
     except (FileNotFoundError, DataValidationError) as error:
