@@ -1,5 +1,6 @@
 """Interfaz local para inspeccionar y filtrar el CSV de la ENOE."""
 
+import base64
 from collections.abc import Mapping, Sequence
 from hashlib import sha256
 from io import BytesIO
@@ -91,10 +92,19 @@ def _render_filters(frame: pd.DataFrame) -> dict[str, list[object]]:
     reset_clicked = st.sidebar.button(
         "Restablecer filtros", key="reset_filters", width="stretch"
     )
+    if reset_clicked:
+        for col in FILTER_COLUMNS:
+            key = f"filter_{col}"
+            if key in st.session_state:
+                del st.session_state[key]
+        if "filter_cve_ent" in st.session_state:
+            del st.session_state["filter_cve_ent"]
+        if "_last_selected_ent" in st.session_state:
+            del st.session_state["_last_selected_ent"]
 
     ent_options = get_filter_options(frame, "cve_ent")
     ent_key = "filter_cve_ent"
-    if reset_clicked or ent_key not in st.session_state:
+    if ent_key not in st.session_state:
         st.session_state[ent_key] = ent_options.copy()
     else:
         current = st.session_state[ent_key]
@@ -112,6 +122,11 @@ def _render_filters(frame: pd.DataFrame) -> dict[str, list[object]]:
         apply_filters(frame, {"cve_ent": selected_ent}) if selected_ent else frame
     )
 
+    ent_state_key = "_last_selected_ent"
+    last_selected_ent = st.session_state.get(ent_state_key)
+    ent_changed = last_selected_ent != selected_ent
+    st.session_state[ent_state_key] = selected_ent
+
     for column in FILTER_COLUMNS:
         if column == "cve_ent":
             continue
@@ -119,7 +134,7 @@ def _render_filters(frame: pd.DataFrame) -> dict[str, list[object]]:
             mun_frame if column == "cve_mun" else frame, column
         )
         key = f"filter_{column}"
-        if reset_clicked or key not in st.session_state:
+        if key not in st.session_state or (column == "cve_mun" and ent_changed):
             st.session_state[key] = options.copy()
         else:
             current = st.session_state[key]
@@ -667,6 +682,37 @@ def _render_longitudinal_diagnostics(
 
 def main() -> None:
     st.set_page_config(page_title="Explorador ENOE", layout="wide")
+
+    img_dir = Path(__file__).resolve().parent / "images"
+
+    def img_to_base64(path: Path) -> str:
+        if path.is_file():
+            encoded = base64.b64encode(path.read_bytes()).decode("utf-8")
+            return f"data:image/png;base64,{encoded}"
+        return ""
+
+    logo_udeg = img_to_base64(img_dir / "Logo_UdeG_V2.png")
+    logo_cucea = img_to_base64(img_dir / "Logo-cucea.png")
+    logo_dti = img_to_base64(img_dir / "dti.png")
+
+    st.markdown(
+        f"""
+        <div style="display: flex; justify-content: center; align-items: center; gap: 40px; margin-bottom: 15px; flex-wrap: wrap;">
+            <img src="{logo_udeg}" style="height: 65px; object-fit: contain;" />
+            <img src="{logo_cucea}" style="height: 65px; object-fit: contain;" />
+            <img src="{logo_dti}" style="height: 65px; object-fit: contain;" />
+        </div>
+        <div style="text-align: center; line-height: 1.8; margin-bottom: 20px;">
+            <b>Presentado por:</b> Juan Jose Robles Gomez<br>
+            <b>Materia:</b> Probabilidad y Procesos Estocásticos<br>
+            <b>Doctorado en Tecnologías de Información</b><br>
+            <b>Instructora:</b> Dra. Silvana Guadalupe Navarro Jimenez
+        </div>
+        <hr style="margin-top: 10px; margin-bottom: 20px;" />
+        """,
+        unsafe_allow_html=True,
+    )
+
     st.title("Explorador interactivo ENOE")
     st.caption(
         "Seleccione filtros para actualizar la tabla del CSV. "
@@ -680,6 +726,19 @@ def main() -> None:
         index=2,
         key="selected_enoe_file",
     )
+
+    prev_file = st.session_state.get("previous_enoe_file")
+    if prev_file != selected_file:
+        st.session_state["previous_enoe_file"] = selected_file
+        for col in FILTER_COLUMNS:
+            key = f"filter_{col}"
+            if key in st.session_state:
+                del st.session_state[key]
+        if "filter_cve_ent" in st.session_state:
+            del st.session_state["filter_cve_ent"]
+        if "_last_selected_ent" in st.session_state:
+            del st.session_state["_last_selected_ent"]
+
     default_path = (
         Path(__file__).resolve().parent / "enoe" / selected_file
     )
