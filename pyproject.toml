@@ -23,3 +23,10 @@ include = ["enoe_app*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+
+[tool.poetry]
+name = "enoe-explorer"
+version = "0.1.0"
+description = ""
+authors = ["Juanjo Robles <jjroblesg@hotmail.com>"]
+package-mode = false
