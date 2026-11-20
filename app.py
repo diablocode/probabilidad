@@ -637,6 +637,22 @@ def _render_longitudinal_diagnostics(
         f"Filas con al menos una pareja candidata: {linked_rows:,} "
         f"de {report.valid_rows:,}."
     )
+    cov_str = f"{coverage:.1%}" if coverage is not None else "N/D"
+    with st.expander("Detalle de cálculo: Cobertura potencial de seguimiento"):
+        st.markdown(
+            f"""
+La **Cobertura potencial de seguimiento** mide la proporción de registros válidos que lograron ser vinculados de manera consecutiva entre trimestres adyacentes.
+
+**Fórmula:**
+$$\\text{{Cobertura}} = \\frac{{\\text{{Filas con al menos una pareja}}}}{{\\text{{Total de filas válidas}}}} = \\frac{{N_{{\\text{{valid}}}} - N_{{\\text{{unpaired}}}}}}{{N_{{\\text{{valid}}}}}}$$
+
+**Componentes actuales:**
+- **Total de filas válidas ($N_{{\\text{{valid}}}}$):** `{report.valid_rows:,}`
+- **Registros válidos sin pareja consecutiva ($N_{{\\text{{unpaired}}}}$):** `{report.unpaired_valid_rows:,}`
+- **Filas con al menos una pareja enlazada ($N_{{\\text{{linked}}}}$):** `{linked_rows:,}` (`{report.valid_rows:,} - {report.unpaired_valid_rows:,}`)
+- **Resultado:** `{cov_str}`
+            """
+        )
     if report.duplicate_person_period_rows:
         st.warning(
             f"Hay {report.duplicate_person_period_rows:,} filas con clave "
